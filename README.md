@@ -28,12 +28,28 @@ npm run db:migrate:dev -- --name init     # membuat folder migrations (commit ha
 npm run dev                                # api + wa-worker + ai-worker
 ```
 
+## Sekali jalan (Docker Compose, backend + frontend)
+
+```bash
+cp .env.example .env                  # isi manual, JANGAN kirim isi .env ke AI/chat mana pun
+bash scripts/docker-up.sh             # postgres + redis + api + wa-worker + ai-worker + web + caddy
+bash scripts/docker-up.sh --seed      # opsional: tambah akun demo + saldo uji
+# Web: http://localhost:3000  |  API: http://localhost:3001/health
+# Berhenti: docker compose --env-file .env -f docker/docker-compose.yml down
+```
+
+Script itu mengecek `.env` ada dan variabel wajib terisi, lalu menyiapkan
+skema database (migrate deploy kalau folder migrations ada, kalau tidak
+pakai db push untuk test pertama), baru membangun dan menjalankan semua
+service. Untuk Codespaces, isi `WEB_PUBLIC_API_URL` dengan URL forward port
+3001 dan masukkan URL forward port 3000 ke `WEB_ORIGIN`, lalu jalankan
+ulang script supaya build web memakai URL API yang benar.
+
 ## Deploy (VPS, Docker Compose)
 
 ```bash
 cp .env.example .env && nano .env     # isi semua; API_DOMAIN = domain API kamu
-bash scripts/migrate.sh               # butuh folder migrations dari langkah dev di atas
-docker compose --env-file .env -f docker/docker-compose.yml up -d --build
+bash scripts/docker-up.sh             # setara dengan langkah migrate + up di bawah, sekali jalan
 bash scripts/seed.sh                  # opsional: akun demo + saldo uji
 ```
 
