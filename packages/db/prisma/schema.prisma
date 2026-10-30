@@ -1,0 +1,177 @@
+// Bakulan WA — skema inti MVP
+// Multi-tenant lewat row-level tenant_id (bukan schema-per-tenant).
+// messages & wallet_ledger append-only: hanya INSERT, jangan UPDATE/DELETE.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum TenantStatus {
+  active
+  suspended
+}
+
+enum WaSessionStatus {
+  pending_qr
+  connected
+  disconnected
+  logged_out
+}
+
+enum MessageDirection {
+  in
+  out
+}
+
+enum LedgerType {
+  topup
+  debit
+  refund
+}
+
+enum MidtransStatus {
+  pending
+  settlement
+  capture
+  deny
+  cancel
+  expire
+  failure
+}
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String   @map("password_hash")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  tenants Tenant[]
+
+  @@map("users")
+}
+
+model Tenant {
+  id           String       @id @default(uuid())
+  businessName String       @map("business_name")
+  ownerUserId  String       @map("owner_user_id")
+  owner        User         @relation(fields: [ownerUserId], references: [id])
+  status       TenantStatus @default(active)
+  createdAt    DateTime     @default(now()) @map("created_at")
+  updatedAt    DateTime     @updatedAt @map("updated_at")
+  deletedAt    DateTime?    @map("deleted_at")
+
+  waSession     WaSession?
+  personas      Persona[]
+  messages      Message[]
+  ledgerEntries WalletLedger[]
+  walletBalance WalletBalance?
+  midtransTx    MidtransTransaction[]
+
+  @@index([ownerUserId])
+  @@map("tenants")
+}
+
+// Satu sesi WhatsApp per tenant di MVP (tenant_id unique). Saat logout/scan ulang,
+// baris yang sama di-reset — jadi phone_number unik tidak bentrok dengan riwayat sendiri.
+model WaSession {
+  id                 String          @id @default(uuid())
+  tenantId           String          @unique @map("tenant_id")
+  tenant             Tenant          @relation(fields: [tenantId], references: [id])
+  phoneNumber        String?         @unique @map("phone_number")
+  status             WaSessionStatus @default(pending_qr)
+  // Auth state Baileys (creds + signal keys) -> JSON -> AES-256-GCM -> bytes.
+  authStateEncrypted Bytes?          @map("auth_state")
+  lastConnectedAt    DateTime?       @map("last_connected_at")
+  createdAt          DateTime        @default(now()) @map("created_at")
+  updatedAt          DateTime        @updatedAt @map("updated_at")
+
+  messages Message[]
+
+  @@map("wa_sessions")
+}
+
+model Persona {
+  id           String   @id @default(uuid())
+  tenantId     String   @map("tenant_id")
+  tenant       Tenant   @relation(fields: [tenantId], references: [id])
+  name         String
+  systemPrompt String   @map("system_prompt") @db.Text
+  aiProvider   String   @default("deepseek") @map("ai_provider")
+  isActive     Boolean  @default(false) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  @@index([tenantId])
+  @@map("personas")
+}
+
+// Catatan: dibanding dokumen desain, ditambah contact_jid (memori percakapan harus per-kontak,
+// bukan per-tenant) dan wa_message_id (idempotensi saat job di-retry).
+model Message {
+  id               String           @id @default(uuid())
+  tenantId         String           @map("tenant_id")
+  tenant           Tenant           @relation(fields: [tenantId], references: [id])
+  waSessionId      String           @map("wa_session_id")
+  waSession        WaSession        @relation(fields: [waSessionId], references: [id])
+  contactJid       String           @map("contact_jid")
+  waMessageId      String?          @map("wa_message_id")
+  direction        MessageDirection
+  content          String           @db.Text
+  promptTokens     Int              @default(0) @map("prompt_tokens")
+  completionTokens Int              @default(0) @map("completion_tokens")
+  createdAt        DateTime         @default(now()) @map("created_at")
+
+  @@unique([waSessionId, waMessageId])
+  @@index([tenantId, createdAt])
+  @@index([waSessionId, contactJid, createdAt])
+  @@map("messages")
+}
+
+model WalletLedger {
+  id           String     @id @default(uuid())
+  tenantId     String     @map("tenant_id")
+  tenant       Tenant     @relation(fields: [tenantId], references: [id])
+  type         LedgerType
+  amount       Decimal    @db.Decimal(14, 2)
+  balanceAfter Decimal    @map("balance_after") @db.Decimal(14, 2)
+  referenceId  String?    @map("reference_id")
+  createdAt    DateTime   @default(now()) @map("created_at")
+
+  // Sabuk pengaman idempotensi: satu order Midtrans hanya bisa mengkredit sekali,
+  // satu pesan hanya bisa ditagih sekali — walau webhook/job datang dobel.
+  @@unique([type, referenceId])
+  @@index([tenantId, createdAt])
+  @@map("wallet_ledger")
+}
+
+// Cache saldo supaya tiap panggilan AI tidak menjumlah seluruh ledger.
+// Barisnya di-lock (SELECT ... FOR UPDATE) di transaksi yang sama dengan insert ledger.
+model WalletBalance {
+  tenantId  String   @id @map("tenant_id")
+  tenant    Tenant   @relation(fields: [tenantId], references: [id])
+  balance   Decimal  @default(0) @db.Decimal(14, 2)
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("wallet_balances")
+}
+
+model MidtransTransaction {
+  id                String         @id @default(uuid())
+  tenantId          String         @map("tenant_id")
+  tenant            Tenant         @relation(fields: [tenantId], references: [id])
+  orderId           String         @unique @map("order_id")
+  grossAmount       Decimal        @map("gross_amount") @db.Decimal(14, 2)
+  status            MidtransStatus @default(pending)
+  rawWebhookPayload Json?          @map("raw_webhook_payload")
+  createdAt         DateTime       @default(now()) @map("created_at")
+  updatedAt         DateTime       @updatedAt @map("updated_at")
+
+  @@index([tenantId])
+  @@map("midtrans_transactions")
+}
