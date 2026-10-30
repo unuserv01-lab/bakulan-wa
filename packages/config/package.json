@@ -1,0 +1,13 @@
+{
+  "name": "@bakulan/config",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/env.ts"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "zod": "^3.25.0"
+  }
+}
