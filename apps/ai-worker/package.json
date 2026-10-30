@@ -1,0 +1,19 @@
+{
+  "name": "@bakulan/ai-worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts"
+  },
+  "dependencies": {
+    "@bakulan/config": "*",
+    "@bakulan/db": "*",
+    "@bakulan/shared-types": "*",
+    "bullmq": "^5.81.5",
+    "ioredis": "^5.4.1",
+    "pino": "^9.6.0",
+    "zod": "^3.25.0"
+  }
+}
