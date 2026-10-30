@@ -1,4 +1,6 @@
-# Jalankan dari root repo:
+# Jalankan sekali jalan dari root repo (sudah termasuk DB + semua service):
+#   bash scripts/docker-up.sh
+# Manual, setara dengan script itu:
 #   docker compose --env-file .env -f docker/docker-compose.yml up -d --build
 name: bakulan-wa
 
@@ -41,6 +43,11 @@ services:
       context: ..
       dockerfile: docker/Dockerfile.api
     restart: unless-stopped
+    # Port ini dipetakan supaya browser bisa langsung memanggil API di
+    # http://localhost:3001 saat test lokal. Untuk produksi lewat domain,
+    # Caddy di bawah tetap menjadi pintu masuknya.
+    ports:
+      - "3001:3001"
     env_file: ../.env
     environment: *app-env
     depends_on:
@@ -89,6 +96,27 @@ services:
       retries: 5
       start_period: 20s
     stop_grace_period: 60s # job AI yang sedang jalan boleh selesai dulu
+
+  web:
+    # Dashboard PWA (apps/web, Next.js). NEXT_PUBLIC_API_URL dibaca saat
+    # build, jadi nilainya harus URL API yang bisa diakses browser, BUKAN
+    # hostname internal Docker (api:3001 tidak bisa dibuka browser).
+    # Lokal: http://localhost:3001 (default).
+    # Codespaces: URL forward port 3001, mis. https://<nama>-3001.app.github.dev
+    #   (atur lewat WEB_PUBLIC_API_URL di .env, dan masukkan URL web-nya
+    #   ke WEB_ORIGIN backend supaya tidak kena CORS).
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.web
+      args:
+        NEXT_PUBLIC_API_URL: ${WEB_PUBLIC_API_URL:-http://localhost:3001}
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      NEXT_PUBLIC_API_URL: ${WEB_PUBLIC_API_URL:-http://localhost:3001}
+    depends_on:
+      api: { condition: service_healthy }
 
   caddy:
     image: caddy:2-alpine
